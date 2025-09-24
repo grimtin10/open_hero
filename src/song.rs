@@ -4,7 +4,7 @@ use std::{collections::HashMap, error::Error, fs};
 //       this would allow for super easy chart editing and saving and honestly it would just be cool
 
 #[derive(Debug, Clone, Default)]
-struct SongSection {
+pub struct SongSection {
     pub name: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
@@ -20,13 +20,20 @@ struct SongSection {
 }
 
 #[derive(Debug)]
-enum SyncEvent {
-    TimeSignature(usize, usize),
-    Tempo(f32),
+pub struct TempoEvent {
+    pub bpm: f32,
+
+    pub time: f64, // in seconds
 }
 
 #[derive(Debug)]
-enum GlobalEvent {
+pub enum SyncEvent {
+    TimeSignature(usize, usize),
+    Tempo(TempoEvent),
+}
+
+#[derive(Debug)]
+pub enum GlobalEvent {
     Section(String),
     PhraseStart,
     Lyric(String),
@@ -35,7 +42,7 @@ enum GlobalEvent {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-enum Instrument {
+pub enum Instrument {
     Single,
     DoubleGuitar,
     DoubleBass,
@@ -44,7 +51,7 @@ enum Instrument {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-enum Difficulty {
+pub enum Difficulty {
     Easy,
     Medium,
     Hard,
@@ -53,19 +60,19 @@ enum Difficulty {
 
 // currently only starpower is supported, but more may be in the future
 #[derive(Debug)]
-struct StarpowerEvent {
+pub struct StarpowerEvent {
     pub tick: usize,
     pub length: usize,
 }
 
 #[derive(Debug)]
-enum LocalEvent {
+pub enum LocalEvent {
     SoloStart,
     SoloEnd,
 }
 
 #[derive(Debug)]
-struct Note {
+pub struct Note {
     pub tick: usize,
     pub frets: u8,
     pub length: [usize; 8],
@@ -74,7 +81,7 @@ struct Note {
 }
 
 #[derive(Debug)]
-struct Chart {
+pub struct Chart {
     pub notes: Vec<Note>,
     pub starpower_events: Vec<StarpowerEvent>,
 }
@@ -123,7 +130,47 @@ pub fn parse(file: String) -> Result<Song, Box<dyn Error>> {
         i += 1;
     }
 
+    // TODO: better error handling
+    let mut time = 0.0;
+    let mut last_tick = 0;
+    let mut last_bpm = 120.0;
+    let resolution = song.metadata.as_ref().expect("Chart had no Song metadata!").resolution.expect("Chart had no resolution!");
+    let mut bpm_events = Vec::new(); // this is just to make it 0.1% faster
+    for event in song.sync_track.as_mut().expect("Chart had no SyncTrack!") {
+        let tick = event.0;
+        match &mut event.1 {
+            SyncEvent::Tempo(tempo) => {
+                time += ticks_to_seconds(tick - last_tick, last_bpm, resolution);
+                tempo.time = time;
+                last_tick = tick;
+                last_bpm = tempo.bpm;
+                bpm_events.push((tick, time, tempo.bpm));
+            }
+            _ => {}
+        }
+    }
+
+    for (_, chart) in &mut song.charts {
+        calculate_note_times(chart, &bpm_events, resolution);
+    }
+
     Ok(song)
+}
+
+fn calculate_note_times(chart: &mut Chart, bpm_events: &Vec<(usize, f64, f32)>, resolution: usize) {
+    let mut last_bpm = 0;
+    for note in &mut chart.notes {
+        while last_bpm + 1 < bpm_events.len() && bpm_events[last_bpm + 1].0 <= note.tick {
+            last_bpm += 1;
+        }
+        
+        let bpm = &bpm_events[last_bpm];
+        note.time = bpm.1 + ticks_to_seconds(note.tick - bpm.0, bpm.2, resolution);
+    }
+}
+
+fn ticks_to_seconds(ticks: usize, bpm: f32, resolution: usize) -> f64 {
+    ticks as f64 / resolution as f64 * (60.0 / bpm as f64)
 }
 
 fn parse_song(lines: &Vec<String>, i: &mut usize) -> SongSection {
@@ -177,7 +224,7 @@ fn parse_sync(lines: &Vec<String>, i: &mut usize) -> Vec<(usize, SyncEvent)> {
                     }
                 )
             )),
-            "b" => res.push((tick, SyncEvent::Tempo(split[3].parse().unwrap()))),
+            "b" => res.push((tick, SyncEvent::Tempo(TempoEvent { bpm: split[3].parse::<usize>().unwrap() as f32 / 1000.0, time: 0.0 }))),
             _ => {}
         }
 
@@ -265,7 +312,7 @@ fn parse_chart(lines: &Vec<String>, i: &mut usize, chart_type: String) -> (Instr
             "n" => {
                 let fret: u8 = val[1].parse().unwrap();
                 let length = val[2].parse().unwrap();
-                cur_frets = cur_frets | (0b00000001 << fret);
+                cur_frets = cur_frets | (1 << fret);
                 cur_length[fret as usize] = length;
 
                 if last_tick != tick {
