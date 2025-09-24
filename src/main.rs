@@ -1,4 +1,5 @@
 mod controllers;
+mod song;
 
 use std::time::Instant;
 
@@ -30,7 +31,7 @@ fn window_conf() -> Conf {
         window_width: 1280,
         window_height: 720,
         window_resizable: false,
-        
+
         ..Default::default()
     }
 }
@@ -38,14 +39,13 @@ fn window_conf() -> Conf {
 #[macroquad::main(window_conf)]
 async fn main() {
     let start = Instant::now();
-
     let assets = load_assets("assets").await;
-
     println!("Loading assets took {}ms", (Instant::now()-start).as_millis());
 
     let mut controllers = ControllerManager::new().unwrap();
-
     let mut pressed: [bool; 5] = [false, false, false, false, false];
+
+    let song = song::parse("songs/Star/notes.chart".into());
 
     loop {
         for event in controllers.drain_events() {
@@ -80,15 +80,8 @@ async fn main() {
             render_fret(&assets, i, pressed[i]);
         }
 
-        for i in 0..5 {
-            render_note(&assets, i, 0.0);
-            render_note(&assets, i, 0.333);
-            render_note(&assets, i, 0.9);
-            // render_note(&assets, i, (mouse_position().1-305.0)/(655.0-305.0));
-        }
-
         draw_fps();
-        
+
         next_frame().await;
     }
 }
@@ -98,16 +91,16 @@ async fn load_assets(folder: &'static str) -> Assets {
 
     for i in 0..3 {
         frets.push(FretAssets {
-            fret: load_texture(&format!("{folder}/{i}_fret.png")).await.unwrap(),
-            fret_pressed: load_texture(&format!("{folder}/{i}_fret_pressed.png")).await.unwrap(),
-            pressed: load_texture(&format!("{folder}/{i}_pressed.png")).await.unwrap(),
-            ring: load_texture(&format!("{folder}/{i}_ring.png")).await.unwrap(),
-            shell: load_texture(&format!("{folder}/{i}_shell.png")).await.unwrap()
+            fret: load_texture(&format!("{folder}/frets/{i}_fret.png")).await.unwrap(),
+            fret_pressed: load_texture(&format!("{folder}/frets/{i}_fret_pressed.png")).await.unwrap(),
+            pressed: load_texture(&format!("{folder}/frets/{i}_pressed.png")).await.unwrap(),
+            ring: load_texture(&format!("{folder}/frets/{i}_ring.png")).await.unwrap(),
+            shell: load_texture(&format!("{folder}/frets/{i}_shell.png")).await.unwrap()
         });
     }
 
     Assets {
-        note: load_texture(&format!("{folder}/note.png")).await.unwrap(),
+        note: load_texture(&format!("{folder}/notes/note.png")).await.unwrap(),
         frets
     }
 }
