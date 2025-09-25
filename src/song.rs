@@ -71,7 +71,7 @@ pub enum LocalEvent {
     SoloEnd,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Note {
     pub tick: usize,
     pub frets: u8,

@@ -53,6 +53,12 @@ struct Strikeline {
     pub pressed: u8,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct NoteContainer {
+    pub note: Note,
+    pub t: f32,
+}
+
 fn window_conf() -> Conf {
     Conf {
         window_title: "Open Hero".into(),
@@ -76,6 +82,8 @@ async fn main() {
     let song_name = "Star";
     let song = song::parse(format!("songs/{song_name}/notes.chart")).unwrap();
     let chart = song.charts.get(&(Instrument::Single, Difficulty::Expert)).unwrap();
+    let mut notes: Vec<NoteContainer> = chart.notes.iter().map(|note| NoteContainer { note: *note, t: 0.0 }).collect();
+    notes.reverse();
 
     let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
     let audio = StreamingSoundData::from_file(format!("songs/{song_name}/song.ogg")).unwrap().volume(-1000.0);
@@ -92,7 +100,7 @@ async fn main() {
     let mut time_offset = 0.0; // offset between input system time and game time
     let mut frame_count = 0;
     loop {
-        handle_inputs(&mut controllers, &mut strikeline, time);
+        // handle_inputs(&mut controllers, &mut strikeline, time, &mut notes);
 
         clear_background(BLACK);
 
@@ -116,9 +124,23 @@ async fn main() {
             render_fret(&assets, i, strikeline.frets[i], strikeline.pressed >> i & 1 == 1);
         }
 
-        // TODO: note rendering that isn't really dumb
-        for note in chart.notes.iter().rev() {
-            render_note(&assets, &note, time);
+        let mut render_start = notes.len() - 1;
+        let mut render_end = notes.len() - 1;
+        let mut i = notes.len() - 1;
+        while i >= 0 {
+            let note = &mut notes[i];
+            note.t = time_to_t(note.note.time as f32 - time);
+            if note.t > NEAR_T { render_start = i; }
+            if note.t < FAR_T { render_end = i; break; }
+
+            i -= 1;
+        }
+
+        let mut i = render_start;
+        while i >= render_end {
+            let note = &notes[i];
+            render_note(&assets, &note.note, note.t);
+            i -= 1;
         }
 
         draw_fps();
@@ -142,13 +164,14 @@ async fn main() {
     }
 }
 
-fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikeline, time: f32) {
+fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikeline, time: f32, notes: &mut Vec<Note>) {
     let input_time = controllers.start.elapsed().as_secs_f32();
     let time_offset = time - input_time;
 
     for event in controllers.drain_events() {
         // convert microseconds to seconds then to game time
         let event_time = event.timestamp as f32 / 1_000_000.0 + time_offset;
+
         match event.event {
             ControllerEventType::ButtonPressed(button) => {
                 match button {
@@ -249,9 +272,7 @@ fn time_to_t(time: f32) -> f32 {
     return 1.0 - time;
 }
 
-fn render_note(assets: &Assets, note: &Note, time: f32) {
-    let t = time_to_t(note.time as f32 - time);
-    if t < FAR_T || t > NEAR_T { return }
+fn render_note(assets: &Assets, note: &Note, t: f32) {
     if note.frets >> 7 & 1 == 1 {
         if note.is_hopo || note.frets >> 6 & 1 == 1 {
             render_gem(&assets.notes.open_hopo, 6, t);
