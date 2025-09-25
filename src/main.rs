@@ -16,7 +16,7 @@ const FADE_T: f32 = 0.1;
 
 // clone hero hit window (for now)
 const HIT_FRONT: f32 = 0.07;
-const HIT_BACK: f32 = 0.07;
+const HIT_BACK:  f32 = 0.07;
 
 struct NoteAssets {
     pub note: Texture2D,
@@ -86,7 +86,7 @@ async fn main() {
     notes.reverse();
 
     let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
-    let audio = StreamingSoundData::from_file(format!("songs/{song_name}/song.ogg")).unwrap().volume(-1000.0);
+    let audio = StreamingSoundData::from_file(format!("songs/{song_name}/song.ogg")).unwrap().volume(-12.0);
 
     let mut audio_playing = false;
     let mut audio_handle = manager.play(audio).unwrap();
@@ -100,17 +100,17 @@ async fn main() {
     let mut time_offset = 0.0; // offset between input system time and game time
     let mut frame_count = 0;
     loop {
-        // handle_inputs(&mut controllers, &mut strikeline, time, &mut notes);
-
         clear_background(BLACK);
 
-        draw_polygon(&[
-            vec2(t_to_x(2.0, -0.5), t_to_y(NEAR_T)),
-            vec2(t_to_x(2.0, 4.5), t_to_y(NEAR_T)),
-            vec2(t_to_x(FAR_T, 4.5), t_to_y(FAR_T)),
-            vec2(t_to_x(FAR_T, -0.5), t_to_y(FAR_T)),
-        ], BLACK);
+        // // highway background
+        // draw_polygon(&[
+        //     vec2(t_to_x(2.0, -0.5), t_to_y(NEAR_T)),
+        //     vec2(t_to_x(2.0, 4.5), t_to_y(NEAR_T)),
+        //     vec2(t_to_x(FAR_T, 4.5), t_to_y(FAR_T)),
+        //     vec2(t_to_x(FAR_T, -0.5), t_to_y(FAR_T)),
+        // ], BLACK);
 
+        // hit window
         let hit_start = perspective(time_to_t(HIT_FRONT));
         let hit_end = perspective(time_to_t(-HIT_BACK));
         draw_polygon(&[
@@ -120,36 +120,46 @@ async fn main() {
             vec2(t_to_x(hit_end,   -0.5), t_to_y(hit_end)),
         ], Color::new(1.0, 1.0, 1.0, 0.25));
 
+        // strikeline
         for i in 0..5 {
             render_fret(&assets, i, strikeline.frets[i], strikeline.pressed >> i & 1 == 1);
         }
 
-        let mut render_start = notes.len() - 1;
+        // get notes on screen
         let mut render_end = notes.len() - 1;
+        let mut render_start = notes.len() - 1;
         let mut i = notes.len() - 1;
         while i >= 0 {
             let note = &mut notes[i];
             note.t = time_to_t(note.note.time as f32 - time);
-            if note.t > NEAR_T { render_start = i; }
-            if note.t < FAR_T { render_end = i; break; }
+            if note.t > NEAR_T { render_end = i; }
+            if note.t < FAR_T { render_start = i; break; }
 
             i -= 1;
         }
 
+        // render notes
         let mut i = render_start;
-        while i >= render_end {
+        while i <= render_end {
             let note = &notes[i];
             render_note(&assets, &note.note, note.t);
-            i -= 1;
+            i += 1;
         }
 
+        handle_inputs(&mut controllers, &mut strikeline, time, &mut notes);
+
         draw_fps();
+
+        // skip the first couple frames because of large frame times
         if frame_count > 2 {
+            // sync the game time and the input handler time
             if time_offset == 0.0 {
                 time_offset = time - controllers.start.elapsed().as_secs_f32();
             }
             time = controllers.start.elapsed().as_secs_f32() + time_offset;
         }
+
+        // start the song when time >= 0
         if time >= 0.0 && !audio_playing {
             audio_handle.resume(Tween {
                 duration: Duration::from_millis(1),
@@ -164,10 +174,12 @@ async fn main() {
     }
 }
 
-fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikeline, time: f32, notes: &mut Vec<Note>) {
+fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikeline, time: f32, notes: &mut Vec<NoteContainer>) {
+    // get offset from input handler time to game time
     let input_time = controllers.start.elapsed().as_secs_f32();
     let time_offset = time - input_time;
 
+    // loop over every event and check for note hit
     for event in controllers.drain_events() {
         // convert microseconds to seconds then to game time
         let event_time = event.timestamp as f32 / 1_000_000.0 + time_offset;
@@ -195,8 +207,37 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
             }
             _ => {}
         }
+
+        // check for hits
+        let mut i = notes.len() - 1;
+        while i > 0 {
+            let note = &notes[i];
+            let time = note.note.time as f32 - time;
+
+            if time < HIT_FRONT && time > -HIT_BACK {
+                if note.note.frets_masked == strikeline.pressed {
+                    for i in 0..5 {
+                        if note.note.frets_masked >> i & 1 == 1 || note.note.frets >> 7 & 1 == 1 {
+                            strikeline.frets[i].height = 1.0;
+                        }
+                    }
+                    notes.remove(i);
+                }
+                break;
+            }
+
+            if time > HIT_FRONT { break; }
+
+            i -= 1;
+        }
     }
 
+    if notes[notes.len()-1].t > NEAR_T {
+        notes.remove(notes.len()-1);
+    }
+
+
+    // update fret hit animation
     for fret in &mut strikeline.frets {
         if fret.height > 0.0 {
             fret.height -= get_frame_time() * 10.0;
