@@ -102,6 +102,8 @@ async fn main() {
     loop {
         clear_background(BLACK);
 
+        handle_inputs(&mut controllers, &mut strikeline, time, &mut notes);
+
         // // highway background
         // draw_polygon(&[
         //     vec2(t_to_x(2.0, -0.5), t_to_y(NEAR_T)),
@@ -135,6 +137,7 @@ async fn main() {
             if note.t > NEAR_T { render_end = i; }
             if note.t < FAR_T { render_start = i; break; }
 
+            // TODO: this crashes at the end of the song! :D
             i -= 1;
         }
 
@@ -145,8 +148,6 @@ async fn main() {
             render_note(&assets, &note.note, note.t);
             i += 1;
         }
-
-        handle_inputs(&mut controllers, &mut strikeline, time, &mut notes);
 
         draw_fps();
 
@@ -178,7 +179,16 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
     // get offset from input handler time to game time
     let input_time = controllers.start.elapsed().as_secs_f32();
     let time_offset = time - input_time;
+    
+    // update fret hit animation
+    for fret in &mut strikeline.frets {
+        if fret.height > 0.0 {
+            fret.height -= get_frame_time() * 10.0;
+        }
+        fret.height = fret.height.max(0.0);
+    }
 
+    let mut hits = 0;
     // loop over every event and check for note hit
     for event in controllers.drain_events() {
         // convert microseconds to seconds then to game time
@@ -212,7 +222,7 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
         let mut i = notes.len() - 1;
         while i > 0 {
             let note = &notes[i];
-            let time = note.note.time as f32 - time;
+            let time = note.note.time as f32 - event_time;
 
             if time < HIT_FRONT && time > -HIT_BACK {
                 if note.note.frets_masked == strikeline.pressed {
@@ -222,6 +232,7 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
                         }
                     }
                     notes.remove(i);
+                    hits += 1;
                 }
                 break;
             }
@@ -231,19 +242,10 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
             i -= 1;
         }
     }
+    if hits > 0 { println!("hit {hits} note this frame"); }
 
     if notes[notes.len()-1].t > NEAR_T {
         notes.remove(notes.len()-1);
-    }
-
-
-    // update fret hit animation
-    for fret in &mut strikeline.frets {
-        if fret.height > 0.0 {
-            fret.height -= get_frame_time() * 10.0;
-        } else {
-            fret.height = 0.0;
-        }
     }
 }
 

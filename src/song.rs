@@ -343,7 +343,7 @@ fn parse_chart(lines: &Vec<String>, i: &mut usize, chart_type: String) -> (Instr
                 if last_tick != tick && cur_frets != 0 {
                     let frets_masked = (cur_frets & 0b00011111) | ((cur_frets >> 7 & 1) << 5);
                     notes.push(Note {
-                        tick,
+                        tick: last_tick,
                         frets: cur_frets,
                         frets_masked: frets_masked & 0b00011111, // don't worry about it
                         length: cur_length,
