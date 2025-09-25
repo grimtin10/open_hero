@@ -1,16 +1,31 @@
 mod controllers;
 mod song;
 
-use std::time::Instant;
+use std::{thread, time::{Duration, Instant}};
 
 use gilrs::Button;
-use kira::{sound::streaming::StreamingSoundData, AudioManager, AudioManagerSettings, DefaultBackend};
-use macroquad::{audio, prelude::*};
+use kira::{sound::streaming::StreamingSoundData, AudioManager, AudioManagerSettings, DefaultBackend, Tween};
+use macroquad::{audio, prelude::*, telemetry::frame};
 
 use crate::{controllers::{ControllerEventType, ControllerManager}, song::{Difficulty, Instrument, Note}};
 
-const START_X: [f32; 5] = [576.0, 608.0, 640.0, 672.0, 704.0];
-const END_X: [f32; 5]   = [435.2, 536.6, 640.0, 742.4, 844.8];
+// haha it says fart
+const FAR_T: f32 = 0.0;
+const NEAR_T: f32 = 1.5;
+const FADE_T: f32 = 0.1;
+
+// clone hero hit window (for now)
+const HIT_FRONT: f32 = 0.07;
+const HIT_BACK: f32 = 0.07;
+
+struct NoteAssets {
+    pub note: Texture2D,
+    pub hopo: Texture2D,
+    pub tap: Texture2D,
+    pub wor_tap: Texture2D,
+    pub open: Texture2D,
+    pub open_hopo: Texture2D,
+}
 
 struct FretAssets {
     pub fret: Texture2D,
@@ -21,9 +36,21 @@ struct FretAssets {
 }
 
 struct Assets {
-    pub note: Texture2D,
+    pub notes: NoteAssets,
 
     pub frets: Vec<FretAssets>,
+    pub fret_piston: Texture2D, // doesn't differ between frets so we just have it here
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct FretState {
+    pub height: f32,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+struct Strikeline {
+    pub frets: [FretState; 5],
+    pub pressed: u8,
 }
 
 fn window_conf() -> Conf {
@@ -41,62 +68,118 @@ fn window_conf() -> Conf {
 async fn main() {
     let start = Instant::now();
     let assets = load_assets("assets").await;
-    println!("Loading assets took {}ms", (Instant::now()-start).as_millis());
+    println!("Loading assets took {}ms", start.elapsed().as_millis());
 
     let mut controllers = ControllerManager::new().unwrap();
-    let mut pressed: [bool; 5] = [false, false, false, false, false];
+    let mut strikeline: Strikeline = Strikeline::default();
 
-    let song = song::parse("songs/Star/notes.chart".into()).unwrap();
+    let song_name = "Star";
+    let song = song::parse(format!("songs/{song_name}/notes.chart")).unwrap();
     let chart = song.charts.get(&(Instrument::Single, Difficulty::Expert)).unwrap();
 
     let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
-    let audio = StreamingSoundData::from_file("songs/Star/song.ogg").unwrap();
+    let audio = StreamingSoundData::from_file(format!("songs/{song_name}/song.ogg")).unwrap().volume(-1000.0);
 
-    let audio_handle = manager.play(audio).unwrap();
+    let mut audio_playing = false;
+    let mut audio_handle = manager.play(audio).unwrap();
+    audio_handle.pause(Tween {
+        duration: Duration::from_millis(1),
+        ..Default::default()
+    });
+    audio_handle.seek_to(0.0);
 
-    let mut time = 0.0;
+    let mut time = -5.0;
+    let mut time_offset = 0.0; // offset between input system time and game time
+    let mut frame_count = 0;
     loop {
-        for event in controllers.drain_events() {
-            match event.event {
-                ControllerEventType::ButtonPressed(button) => {
-                    match button {
-                        Button::West =>        pressed[0] = true,
-                        Button::South =>       pressed[1] = true,
-                        Button::North =>       pressed[2] = true,
-                        Button::East =>        pressed[3] = true,
-                        Button::LeftTrigger => pressed[4] = true,
-                        _ => {}
-                    }
-                }
-                ControllerEventType::ButtonReleased(button) => {
-                    match button {
-                        Button::West =>        pressed[0] = false,
-                        Button::South =>       pressed[1] = false,
-                        Button::North =>       pressed[2] = false,
-                        Button::East =>        pressed[3] = false,
-                        Button::LeftTrigger => pressed[4] = false,
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        }
+        handle_inputs(&mut controllers, &mut strikeline, time);
 
         clear_background(BLACK);
 
+        draw_polygon(&[
+            vec2(t_to_x(2.0, -0.5), t_to_y(NEAR_T)),
+            vec2(t_to_x(2.0, 4.5), t_to_y(NEAR_T)),
+            vec2(t_to_x(FAR_T, 4.5), t_to_y(FAR_T)),
+            vec2(t_to_x(FAR_T, -0.5), t_to_y(FAR_T)),
+        ], BLACK);
+
+        let hit_start = perspective(time_to_t(HIT_FRONT));
+        let hit_end = perspective(time_to_t(-HIT_BACK));
+        draw_polygon(&[
+            vec2(t_to_x(hit_start, -0.5), t_to_y(hit_start)),
+            vec2(t_to_x(hit_start, 4.5), t_to_y(hit_start)),
+            vec2(t_to_x(hit_end,   4.5), t_to_y(hit_end)),
+            vec2(t_to_x(hit_end,   -0.5), t_to_y(hit_end)),
+        ], Color::new(1.0, 1.0, 1.0, 0.25));
+
         for i in 0..5 {
-            render_fret(&assets, i, pressed[i]);
+            render_fret(&assets, i, strikeline.frets[i], strikeline.pressed >> i & 1 == 1);
         }
 
+        // TODO: note rendering that isn't really dumb
         for note in chart.notes.iter().rev() {
             render_note(&assets, &note, time);
         }
 
         draw_fps();
-        // time += get_frame_time();
-        time = audio_handle.position() as f32;
+        if frame_count > 2 {
+            if time_offset == 0.0 {
+                time_offset = time - controllers.start.elapsed().as_secs_f32();
+            }
+            time = controllers.start.elapsed().as_secs_f32() + time_offset;
+        }
+        if time >= 0.0 && !audio_playing {
+            audio_handle.resume(Tween {
+                duration: Duration::from_millis(1),
+                ..Default::default()
+            });
+            audio_playing = true;
+        }
+
+        frame_count += 1;
 
         next_frame().await;
+    }
+}
+
+fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikeline, time: f32) {
+    let input_time = controllers.start.elapsed().as_secs_f32();
+    let time_offset = time - input_time;
+
+    for event in controllers.drain_events() {
+        // convert microseconds to seconds then to game time
+        let event_time = event.timestamp as f32 / 1_000_000.0 + time_offset;
+        match event.event {
+            ControllerEventType::ButtonPressed(button) => {
+                match button {
+                    Button::West =>        strikeline.pressed |= 1 << 0,
+                    Button::South =>       strikeline.pressed |= 1 << 1,
+                    Button::North =>       strikeline.pressed |= 1 << 2,
+                    Button::East =>        strikeline.pressed |= 1 << 3,
+                    Button::LeftTrigger => strikeline.pressed |= 1 << 4,
+                    _ => {}
+                }
+            }
+            ControllerEventType::ButtonReleased(button) => {
+                match button {
+                    Button::West =>        strikeline.pressed &= 255 ^ (1 << 0),
+                    Button::South =>       strikeline.pressed &= 255 ^ (1 << 1),
+                    Button::North =>       strikeline.pressed &= 255 ^ (1 << 2),
+                    Button::East =>        strikeline.pressed &= 255 ^ (1 << 3),
+                    Button::LeftTrigger => strikeline.pressed &= 255 ^ (1 << 4),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for fret in &mut strikeline.frets {
+        if fret.height > 0.0 {
+            fret.height -= get_frame_time() * 10.0;
+        } else {
+            fret.height = 0.0;
+        }
     }
 }
 
@@ -109,17 +192,25 @@ async fn load_assets(folder: &'static str) -> Assets {
             fret_pressed: load_texture(&format!("{folder}/frets/{i}_fret_pressed.png")).await.unwrap(),
             pressed: load_texture(&format!("{folder}/frets/{i}_pressed.png")).await.unwrap(),
             ring: load_texture(&format!("{folder}/frets/{i}_ring.png")).await.unwrap(),
-            shell: load_texture(&format!("{folder}/frets/{i}_shell.png")).await.unwrap()
+            shell: load_texture(&format!("{folder}/frets/{i}_shell.png")).await.unwrap(),
         });
     }
 
     Assets {
-        note: load_texture(&format!("{folder}/notes/note.png")).await.unwrap(),
-        frets
+        notes: NoteAssets {
+            note: load_texture(&format!("{folder}/notes/note.png")).await.unwrap(),
+            hopo: load_texture(&format!("{folder}/notes/hopo.png")).await.unwrap(),
+            tap: load_texture(&format!("{folder}/notes/tap.png")).await.unwrap(),
+            wor_tap: load_texture(&format!("{folder}/notes/wor_tap.png")).await.unwrap(),
+            open: load_texture(&format!("{folder}/notes/open.png")).await.unwrap(),
+            open_hopo: load_texture(&format!("{folder}/notes/open_hopo.png")).await.unwrap(),
+        },
+        frets,
+        fret_piston: load_texture(&format!("{folder}/frets/piston.png")).await.unwrap(),
     }
 }
 
-fn render_fret(assets: &Assets, fret: usize, pressed: bool) {
+fn render_fret(assets: &Assets, fret: usize, state: FretState, pressed: bool) {
     let textures = if fret == 0 || fret == 4 {
         &assets.frets[0]
     } else if fret == 1 || fret == 3 {
@@ -130,47 +221,108 @@ fn render_fret(assets: &Assets, fret: usize, pressed: bool) {
 
     let flip = fret > 2;
 
-    let x = END_X[fret];
-    let y = 655.0;
+    let x = t_to_x(1.0, fret as f32);
+    let y = t_to_y(1.0);
 
-    if pressed {
-        render_texture(&textures.pressed, x, y, 0.8, flip);
+    if state.height <= 0.0 && pressed {
+        render_texture(&textures.pressed, x, y, 0.8, flip, 1.0);
     } else {
-        render_texture(&textures.shell, x, y, 0.8, flip);
-        render_texture(&textures.fret, x, y, 0.8, flip);
-        render_texture(&textures.ring, x, y, 0.8, flip);
+        render_texture(&textures.shell, x, y, 0.8, flip, 1.0);
+        render_texture(&assets.fret_piston, x, y + 8.0, 0.8, false, 1.0);
+        render_texture(if pressed { &textures.fret_pressed } else { &textures.fret }, x, y - lerp(0.0, 20.0, state.height), 0.8, flip, 1.0);
+        render_texture(&textures.ring, x, y, 0.8, flip, 1.0);
+    }
+}
+
+fn render_texture(texture: &Texture2D, x: f32, y: f32, scale: f32, flip_x: bool, alpha: f32) {
+    let width = texture.width() * scale;
+    let height = texture.height() * scale;
+
+    draw_texture_ex(texture, x - width / 2.0, y - height / 2.0, Color::new(1.0, 1.0, 1.0, alpha), DrawTextureParams {
+        dest_size: Some(vec2(width, height)),
+        flip_x,
+        ..Default::default()
+    });
+}
+
+fn time_to_t(time: f32) -> f32 {
+    return 1.0 - time;
+}
+
+fn render_note(assets: &Assets, note: &Note, time: f32) {
+    let t = time_to_t(note.time as f32 - time);
+    if t < FAR_T || t > NEAR_T { return }
+    if note.frets >> 7 & 1 == 1 {
+        if note.is_hopo || note.frets >> 6 & 1 == 1 {
+            render_gem(&assets.notes.open_hopo, 6, t);
+        } else {
+            render_gem(&assets.notes.open, 6, t);
+        }
+    }
+    for i in 0..5 {
+        if note.frets >> i & 1 == 1 {
+            render_gem(if note.frets >> 6 & 1 == 1 {
+                &assets.notes.tap
+            } else if note.is_hopo {
+                &assets.notes.hopo
+            } else {
+                &assets.notes.note
+            }, i, t);
+        }
     }
 }
 
 fn lerp(a: f32, b: f32, t: f32) -> f32 { a + t * (b - a) }
 
-fn render_texture(texture: &Texture2D, x: f32, y: f32, scale: f32, flip_x: bool) {
-    let width = texture.width() * scale;
-    let height = texture.height() * scale;
+/// Perspective corrects `t` values
+const PERSPECTIVE: f32 = 3.0;
+fn perspective(t: f32) -> f32 { t / (PERSPECTIVE - (PERSPECTIVE - 1.0) * t) }
 
-    draw_texture_ex(texture, x - width / 2.0, y - height / 2.0, WHITE, DrawTextureParams {
-        dest_size: Some(vec2(width, height)),
-        flip_x,
-        ..Default::default() 
-    });
+/// Expects perspective corrected `t` value
+fn t_to_x(t: f32, fret: f32) -> f32 {
+    let start_x = 576.0 + 32.0 * fret;
+    let end_x = 435.2 + 101.4 * fret;
+    lerp(start_x, end_x, t)
+}
+/// Expects perspective corrected `t` value
+fn t_to_y(t: f32) -> f32 { lerp(305.0, 655.0, t) }
+/// Expects perspective corrected `t` value
+fn t_to_scale(t: f32) -> f32 { lerp(0.4, 1.2, t) }
+
+fn render_gem(texture: &Texture2D, fret: usize, t: f32) {
+    let alpha = ((t - FAR_T) / FADE_T).min(1.0);
+    let t = perspective(t);
+    let scale = if fret == 6 { 0.9 } else { 0.629 };
+    let fret = if fret == 6 { 2 } else { fret };
+    render_texture(
+        texture,
+        t_to_x(t, fret as f32),
+        t_to_y(t),
+        t_to_scale(t) * scale,
+        false,
+        alpha
+    );
 }
 
-fn render_note(assets: &Assets, note: &Note, time: f32) {
-    let t = 1.0 - (note.time as f32 - time);
-    if t < 0.0 || t > 1.5 { return }
-    for i in 0..5 {
-        if note.frets >> i & 1 == 1 {
-            render_gem(assets, i, t);
-        }
+fn triangulate_polygon(vertices: &[Vec2]) -> Vec<[usize; 3]> {
+    let mut tris = Vec::new();
+
+    if vertices.len() < 3 {
+        return tris;
     }
+
+    // TODO: more complex triangulation for non-convex polygons
+    for i in 1..vertices.len() - 1 {
+        tris.push([0, i, i + 1]);
+    }
+
+    tris
 }
 
-fn render_gem(assets: &Assets, fret: usize, t: f32) {
-    let perspective_factor = 3.0; // found through the power of bullshit (but it's actually perfect)
-    let t_p = t / (perspective_factor - (perspective_factor - 1.0) * t);
-    let x = lerp(START_X[fret], END_X[fret], t_p);
-    let y = lerp(305.0, 655.0, t_p);
-    let scale = lerp(0.4, 1.2, t_p) * 0.629;
+fn draw_polygon(vertices: &[Vec2], color: Color) {
+    let tris = triangulate_polygon(vertices);
 
-    render_texture(&assets.note, x, y, scale, false);
+    for tri in tris {
+        draw_triangle(vertices[tri[0]], vertices[tri[1]], vertices[tri[2]], color);
+    }
 }

@@ -31,6 +31,8 @@ pub struct ControllerManager {
     controllers: Arc<Mutex<HashSet<GamepadId>>>,
     #[allow(dead_code)]
     input_thread: thread::JoinHandle<()>,
+    
+    pub start: Instant,
 }
 
 impl ControllerManager {
@@ -131,6 +133,8 @@ impl ControllerManager {
             receiver,
             controllers,
             input_thread,
+
+            start,
         })
     }
 
