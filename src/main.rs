@@ -1,5 +1,6 @@
 mod controllers;
 mod song;
+mod config;
 
 use std::time::Instant;
 
@@ -7,7 +8,7 @@ use gilrs::Button;
 use kira::{sound::streaming::StreamingSoundData, AudioManager, AudioManagerSettings, DefaultBackend};
 use macroquad::{audio, prelude::*};
 
-use crate::{controllers::{ControllerEventType, ControllerManager}, song::{Difficulty, Instrument, Note}};
+use crate::{config::load_config, controllers::{ControllerEventType, ControllerManager}, song::{Difficulty, Instrument, Note}};
 
 const START_X: [f32; 5] = [576.0, 608.0, 640.0, 672.0, 704.0];
 const END_X: [f32; 5]   = [435.2, 536.6, 640.0, 742.4, 844.8];
@@ -42,6 +43,10 @@ async fn main() {
     let start = Instant::now();
     let assets = load_assets("assets").await;
     println!("Loading assets took {}ms", (Instant::now()-start).as_millis());
+
+    let config_file = load_config();
+
+    println!("Testing value: {}", config_file.notespeed);
 
     let mut controllers = ControllerManager::new().unwrap();
     let mut pressed: [bool; 5] = [false, false, false, false, false];
