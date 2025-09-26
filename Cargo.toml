@@ -31,8 +31,5 @@ opt-level = 3
 [profile.dev.package.symphonia-bundle-flac]
 opt-level = 3
 
-[profile.dev.package.symphonia-format-wav]
-opt-level = 3
-
 [profile.dev.package.symphonia-codec-pcm]
 opt-level = 3

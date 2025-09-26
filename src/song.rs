@@ -1,4 +1,4 @@
-use std::{collections::HashMap, error::Error, fs};
+use std::{collections::HashMap, error::Error, fs, time::Instant};
 
 // TODO: in the far future this should be rewritten as a serde serializer/deserializer
 //       this would allow for super easy chart editing and saving and honestly it would just be cool
@@ -71,11 +71,17 @@ pub enum LocalEvent {
     SoloEnd,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Note {
     pub tick: usize,
     pub frets: u8,
+    // frets without any flags
+    pub frets_masked: u8,
     pub length: [usize; 8],
+
+    // TODO: possibly consolidate into one "flags" variable if we ever have more flags
+    pub is_hopo: bool,
+    pub is_chord: bool,
 
     pub time: f64, // in seconds
 }
@@ -84,6 +90,7 @@ pub struct Note {
 pub struct Chart {
     pub notes: Vec<Note>,
     pub starpower_events: Vec<StarpowerEvent>,
+    pub local_events: Vec<LocalEvent>,
 }
 
 #[derive(Debug, Default)]
@@ -96,6 +103,8 @@ pub struct Song {
 }
 
 pub fn parse(file: String) -> Result<Song, Box<dyn Error>> {
+    let start = Instant::now();
+
     let file = String::from_utf8(fs::read(file)?)?;
     let file: String = file.trim_start_matches("\u{FEFF}").into(); // strip BOM
 
@@ -151,21 +160,41 @@ pub fn parse(file: String) -> Result<Song, Box<dyn Error>> {
     }
 
     for (_, chart) in &mut song.charts {
-        calculate_note_times(chart, &bpm_events, resolution);
+        postprocess_notes(chart, &bpm_events, resolution);
     }
+
+    println!("Chart parsing took {}ms", start.elapsed().as_millis());
 
     Ok(song)
 }
 
-fn calculate_note_times(chart: &mut Chart, bpm_events: &Vec<(usize, f64, f32)>, resolution: usize) {
+fn postprocess_notes(chart: &mut Chart, bpm_events: &Vec<(usize, f64, f32)>, resolution: usize) {
     let mut last_bpm = 0;
-    for note in &mut chart.notes {
+    let mut i = 0;
+    while i < chart.notes.len() {
+        let split = chart.notes.split_at_mut(i);
+        let note = &mut split.1[0];
+
         while last_bpm + 1 < bpm_events.len() && bpm_events[last_bpm + 1].0 <= note.tick {
             last_bpm += 1;
         }
-        
+
         let bpm = &bpm_events[last_bpm];
         note.time = bpm.1 + ticks_to_seconds(note.tick - bpm.0, bpm.2, resolution);
+
+        if i > 0 && !note.is_chord {
+            let last_note = &split.0[i - 1];
+            if last_note.is_chord || (!last_note.is_chord && last_note.frets_masked != note.frets_masked) {
+                if note.tick - last_note.tick <= (65.0 * resolution as f32 / 192.0) as usize {
+                    note.is_hopo = true;
+                }
+            }
+        }
+
+        // forcing
+        note.is_hopo ^= note.frets >> 5 & 1 == 1;
+
+        i += 1;
     }
 }
 
@@ -179,7 +208,7 @@ fn parse_song(lines: &Vec<String>, i: &mut usize) -> SongSection {
     loop {
         let line = lines[*i].trim();
         if line == "}" { break; }
-        
+
         let split: Vec<&str> = line.split(" = ").collect();
         match split[0].to_lowercase().as_str() {
             "name"         => res.name = Some(remove_quotes(split[1].into())),
@@ -209,7 +238,7 @@ fn parse_sync(lines: &Vec<String>, i: &mut usize) -> Vec<(usize, SyncEvent)> {
     loop {
         let line = lines[*i].trim();
         if line == "}" { break; }
-        
+
         let split: Vec<&str> = line.split(" ").collect();
         let tick = split[0].parse().unwrap();
         match split[2].to_lowercase().as_str() {
@@ -240,7 +269,7 @@ fn parse_events(lines: &Vec<String>, i: &mut usize) -> Vec<(usize, GlobalEvent)>
     loop {
         let line = lines[*i].trim();
         if line == "}" { break; }
-        
+
         let split: Vec<&str> = line.split(" = ").collect();
         let tick: usize = split[0].parse().unwrap();
 
@@ -294,6 +323,7 @@ fn parse_chart(lines: &Vec<String>, i: &mut usize, chart_type: String) -> (Instr
     let mut cur_length = [0; 8];
     let mut notes = Vec::new();
     let mut starpower_events = Vec::new();
+    let mut local_events = Vec::new();
 
     loop {
         let line = lines[*i].trim();
@@ -310,18 +340,19 @@ fn parse_chart(lines: &Vec<String>, i: &mut usize, chart_type: String) -> (Instr
 
         match note_type.as_str() {
             "n" => {
-                let fret: u8 = val[1].parse().unwrap();
-                let length = val[2].parse().unwrap();
-                cur_frets = cur_frets | (1 << fret);
-                cur_length[fret as usize] = length;
-
-                if last_tick != tick {
+                if last_tick != tick && cur_frets != 0 {
+                    let frets_masked = (cur_frets & 0b00011111) | ((cur_frets >> 7 & 1) << 5);
                     notes.push(Note {
-                        tick,
+                        tick: last_tick,
                         frets: cur_frets,
+                        frets_masked: frets_masked & 0b00011111, // don't worry about it
                         length: cur_length,
 
+                        is_chord: (frets_masked & (frets_masked - 1)) != 0,
+
                         // calculated later
+                        is_hopo: false,
+
                         time: 0.0
                     });
 
@@ -329,17 +360,49 @@ fn parse_chart(lines: &Vec<String>, i: &mut usize, chart_type: String) -> (Instr
                     cur_length = [0; 8];
                 }
 
+                let fret: u8 = val[1].parse().unwrap();
+                let length = val[2].parse().unwrap();
+                cur_frets = cur_frets | (1 << fret);
+                cur_length[fret as usize] = length;
+
                 last_tick = tick;
+            }
+            "s" => {
+                if val[1] == "2" {
+                    starpower_events.push(StarpowerEvent { tick, length: val[2].parse().unwrap() });
+                }
+            }
+            "e" => {
+                match val[1] {
+                    "solo" => local_events.push(LocalEvent::SoloStart),
+                    "soloend" => local_events.push(LocalEvent::SoloEnd),
+                    _ => {},
+                }
             }
             _ => {}
         }
 
         *i += 1;
     }
+    let frets_masked = (cur_frets & 0b00011111) | ((cur_frets >> 7 & 1) << 5);
+    notes.push(Note {
+        tick: last_tick,
+        frets: cur_frets,
+        frets_masked,
+        length: cur_length,
+
+        is_chord: (frets_masked & (frets_masked - 1)) != 0,
+
+        // calculated later
+        is_hopo: false,
+
+        time: 0.0
+    });
 
     (instrument, difficulty, Chart {
         notes,
         starpower_events,
+        local_events,
     })
 }
 
