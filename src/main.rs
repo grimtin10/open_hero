@@ -76,8 +76,9 @@ async fn main() {
     let assets = load_assets("assets").await;
     println!("Loading assets took {}ms", start.elapsed().as_millis());
 
+    // TODO: keyboard support/proper InputManager system
     let mut controllers = ControllerManager::new().unwrap();
-    let mut strikeline: Strikeline = Strikeline::default();
+    let mut strikeline = Strikeline::default();
 
     let song_name = "Star";
     let song = song::parse(format!("songs/{song_name}/notes.chart")).unwrap();
@@ -131,13 +132,13 @@ async fn main() {
         let mut render_end = notes.len() - 1;
         let mut render_start = notes.len() - 1;
         let mut i = notes.len() - 1;
-        while i >= 0 {
+        loop {
             let note = &mut notes[i];
             note.t = time_to_t(note.note.time as f32 - time);
             if note.t > NEAR_T { render_end = i; }
             if note.t < FAR_T { render_start = i; break; }
 
-            // TODO: this crashes at the end of the song! :D
+            if i == 0 { break; }
             i -= 1;
         }
 
@@ -194,6 +195,7 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
         // convert microseconds to seconds then to game time
         let event_time = event.timestamp as f32 / 1_000_000.0 + time_offset;
 
+        // bitmasks are fun
         match event.event {
             ControllerEventType::ButtonPressed(button) => {
                 match button {
@@ -344,6 +346,7 @@ fn perspective(t: f32) -> f32 { t / (PERSPECTIVE - (PERSPECTIVE - 1.0) * t) }
 
 /// Expects perspective corrected `t` value
 fn t_to_x(t: f32, fret: f32) -> f32 {
+    // constants taken from GH3
     let start_x = 576.0 + 32.0 * fret;
     let end_x = 435.2 + 101.4 * fret;
     lerp(start_x, end_x, t)
@@ -367,6 +370,9 @@ fn render_gem(texture: &Texture2D, fret: usize, t: f32) {
         alpha
     );
 }
+
+// TODO: textured polygon rendering
+//       this will require writing a custom shader
 
 fn triangulate_polygon(vertices: &[Vec2]) -> Vec<[usize; 3]> {
     let mut tris = Vec::new();
