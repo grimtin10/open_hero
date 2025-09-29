@@ -1,5 +1,6 @@
 mod controllers;
 mod song;
+mod config;
 
 use std::{thread, time::{Duration, Instant}};
 
@@ -7,7 +8,7 @@ use gilrs::Button;
 use kira::{sound::streaming::StreamingSoundData, AudioManager, AudioManagerSettings, DefaultBackend, Tween};
 use macroquad::{audio, prelude::*, telemetry::frame};
 
-use crate::{controllers::{ControllerEventType, ControllerManager}, song::{Difficulty, Instrument, Note}};
+use crate::{config::load_config, controllers::{ControllerEventType, ControllerManager}, song::{Difficulty, Instrument, Note}};
 
 // haha it says fart
 const FAR_T: f32 = 0.0;
@@ -75,6 +76,14 @@ async fn main() {
     let start = Instant::now();
     let assets = load_assets("assets").await;
     println!("Loading assets took {}ms", start.elapsed().as_millis());
+
+    let config_file = load_config();
+
+    println!("Testing value: {}", config_file.notespeed);
+
+    let config_file = load_config();
+
+    println!("Testing value: {}", config_file.notespeed);
 
     // TODO: keyboard support/proper InputManager system
     let mut controllers = ControllerManager::new().unwrap();
