@@ -2,11 +2,11 @@ mod controllers;
 mod song;
 mod config;
 
-use std::{thread, time::{Duration, Instant}};
+use std::time::{Duration, Instant};
 
 use gilrs::Button;
 use kira::{sound::streaming::StreamingSoundData, AudioManager, AudioManagerSettings, DefaultBackend, Tween};
-use macroquad::{audio, prelude::*, telemetry::frame};
+use macroquad::prelude::*;
 
 use crate::{config::load_config, controllers::{ControllerEventType, ControllerManager}, song::{Difficulty, Instrument, Note}};
 
@@ -77,13 +77,7 @@ async fn main() {
     let assets = load_assets("assets").await;
     println!("Loading assets took {}ms", start.elapsed().as_millis());
 
-    let config_file = load_config();
-
-    println!("Testing value: {}", config_file.notespeed);
-
-    let config_file = load_config();
-
-    println!("Testing value: {}", config_file.notespeed);
+    let config = load_config().expect("Failed to load config");
 
     // TODO: keyboard support/proper InputManager system
     let mut controllers = ControllerManager::new().unwrap();
@@ -95,8 +89,10 @@ async fn main() {
     let mut notes: Vec<NoteContainer> = chart.notes.iter().map(|note| NoteContainer { note: *note, t: 0.0 }).collect();
     notes.reverse();
 
+    let volume = -12.0;
+    let volume = -100000.0;
     let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
-    let audio = StreamingSoundData::from_file(format!("songs/{song_name}/song.ogg")).unwrap().volume(-12.0);
+    let audio = StreamingSoundData::from_file(format!("songs/{song_name}/song.ogg")).unwrap().volume(volume);
 
     let mut audio_playing = false;
     let mut audio_handle = manager.play(audio).unwrap();
@@ -123,8 +119,8 @@ async fn main() {
         // ], BLACK);
 
         // hit window
-        let hit_start = perspective(time_to_t(HIT_FRONT));
-        let hit_end = perspective(time_to_t(-HIT_BACK));
+        let hit_start = perspective(time_to_t(HIT_FRONT, config.notespeed));
+        let hit_end = perspective(time_to_t(-HIT_BACK, config.notespeed));
         draw_polygon(&[
             vec2(t_to_x(hit_start, -0.5), t_to_y(hit_start)),
             vec2(t_to_x(hit_start, 4.5), t_to_y(hit_start)),
@@ -138,25 +134,27 @@ async fn main() {
         }
 
         // get notes on screen
-        let mut render_end = notes.len() - 1;
-        let mut render_start = notes.len() - 1;
-        let mut i = notes.len() - 1;
-        loop {
-            let note = &mut notes[i];
-            note.t = time_to_t(note.note.time as f32 - time);
-            if note.t > NEAR_T { render_end = i; }
-            if note.t < FAR_T { render_start = i; break; }
+        if notes.len() > 0 {
+            let mut render_end = notes.len() - 1;
+            let mut render_start = notes.len() - 1;
+            let mut i = notes.len() - 1;
+            loop {
+                let note = &mut notes[i];
+                note.t = time_to_t(note.note.time as f32 - time, config.notespeed);
+                if note.t > NEAR_T { render_end = i; }
+                if note.t < FAR_T { render_start = i; break; }
 
-            if i == 0 { break; }
-            i -= 1;
-        }
+                if i == 0 { break; }
+                i -= 1;
+            }
 
-        // render notes
-        let mut i = render_start;
-        while i <= render_end {
-            let note = &notes[i];
-            render_note(&assets, &note.note, note.t);
-            i += 1;
+            // render notes
+            let mut i = render_start;
+            while i <= render_end {
+                let note = &notes[i];
+                render_note(&assets, &note.note, note.t);
+                i += 1;
+            }
         }
 
         draw_fps();
@@ -230,6 +228,7 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
         }
 
         // check for hits
+        // TODO: make this not shit lol
         let mut i = notes.len() - 1;
         while i > 0 {
             let note = &notes[i];
@@ -322,9 +321,9 @@ fn render_texture(texture: &Texture2D, x: f32, y: f32, scale: f32, flip_x: bool,
     });
 }
 
-fn time_to_t(time: f32) -> f32 {
-    return 1.0 - time;
-}
+/// This function converts a time value (0 being at the strikeline, in seconds) to a position on the highway
+/// `notespeed` is in CH notespeed
+fn time_to_t(time: f32, notespeed: f32) -> f32 { 1.0 - (time * notespeed) / 7.87 }
 
 fn render_note(assets: &Assets, note: &Note, t: f32) {
     if note.frets >> 7 & 1 == 1 {
@@ -347,6 +346,7 @@ fn render_note(assets: &Assets, note: &Note, t: f32) {
     }
 }
 
+/// Linear interpolation from `a` to `b` with `t`
 fn lerp(a: f32, b: f32, t: f32) -> f32 { a + t * (b - a) }
 
 /// Perspective corrects `t` values
