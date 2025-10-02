@@ -8,7 +8,7 @@ use gilrs::Button;
 use kira::{sound::streaming::StreamingSoundData, AudioManager, AudioManagerSettings, DefaultBackend, Tween};
 use macroquad::prelude::*;
 
-use crate::{config::load_config, controllers::{ControllerEventType, ControllerManager}, song::{Difficulty, Instrument, Note}};
+use crate::{config::{load_config, Config}, controllers::{ControllerEventType, ControllerManager}, song::{Difficulty, Instrument, Note}};
 
 // haha it says fart
 const FAR_T: f32 = 0.0;
@@ -39,7 +39,7 @@ struct FretAssets {
 struct Assets {
     pub notes: NoteAssets,
 
-    pub frets: Vec<FretAssets>,
+    pub frets: [FretAssets; 3],
     pub fret_piston: Texture2D, // doesn't differ between frets so we just have it here
 }
 
@@ -83,16 +83,16 @@ async fn main() {
     let mut controllers = ControllerManager::new().unwrap();
     let mut strikeline = Strikeline::default();
 
-    let song_name = "Star";
+    let song_name = "openchordtest";
     let song = song::parse(format!("songs/{song_name}/notes.chart")).unwrap();
     let chart = song.charts.get(&(Instrument::Single, Difficulty::Expert)).unwrap();
     let mut notes: Vec<NoteContainer> = chart.notes.iter().map(|note| NoteContainer { note: *note, t: 0.0 }).collect();
     notes.reverse();
 
     let volume = -12.0;
-    let volume = -100000.0;
+    // let volume = -100000.0;
     let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
-    let audio = StreamingSoundData::from_file(format!("songs/{song_name}/song.ogg")).unwrap().volume(volume);
+    let audio = StreamingSoundData::from_file(format!("songs/{song_name}/song.mp3")).unwrap().volume(volume);
 
     let mut audio_playing = false;
     let mut audio_handle = manager.play(audio).unwrap();
@@ -144,7 +144,7 @@ async fn main() {
                 if note.t > NEAR_T { render_end = i; }
                 if note.t < FAR_T { render_start = i; break; }
 
-                if i == 0 { break; }
+                if i == 0 { render_start = 0; break; }
                 i -= 1;
             }
 
@@ -152,7 +152,7 @@ async fn main() {
             let mut i = render_start;
             while i <= render_end {
                 let note = &notes[i];
-                render_note(&assets, &note.note, note.t);
+                render_note(&assets, &config, &note.note, note.t);
                 i += 1;
             }
         }
@@ -216,11 +216,11 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
             }
             ControllerEventType::ButtonReleased(button) => {
                 match button {
-                    Button::West =>        strikeline.pressed &= 255 ^ (1 << 0),
-                    Button::South =>       strikeline.pressed &= 255 ^ (1 << 1),
-                    Button::North =>       strikeline.pressed &= 255 ^ (1 << 2),
-                    Button::East =>        strikeline.pressed &= 255 ^ (1 << 3),
-                    Button::LeftTrigger => strikeline.pressed &= 255 ^ (1 << 4),
+                    Button::West =>        strikeline.pressed &= !(1 << 0),
+                    Button::South =>       strikeline.pressed &= !(1 << 1),
+                    Button::North =>       strikeline.pressed &= !(1 << 2),
+                    Button::East =>        strikeline.pressed &= !(1 << 3),
+                    Button::LeftTrigger => strikeline.pressed &= !(1 << 4),
                     _ => {}
                 }
             }
@@ -229,8 +229,7 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
 
         // check for hits
         // TODO: make this not shit lol
-        let mut i = notes.len() - 1;
-        while i > 0 {
+        for i in (0..notes.len()).rev() {
             let note = &notes[i];
             let time = note.note.time as f32 - event_time;
 
@@ -248,29 +247,21 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
             }
 
             if time > HIT_FRONT { break; }
-
-            i -= 1;
         }
     }
     if hits > 0 { println!("hit {hits} note this frame"); }
 
-    if notes[notes.len()-1].t > NEAR_T {
+    if notes.len() > 0 && notes[notes.len()-1].t > NEAR_T {
         notes.remove(notes.len()-1);
     }
 }
 
 async fn load_assets(folder: &'static str) -> Assets {
-    let mut frets = Vec::new();
-
-    for i in 0..3 {
-        frets.push(FretAssets {
-            fret: load_texture(&format!("{folder}/frets/{i}_fret.png")).await.unwrap(),
-            fret_pressed: load_texture(&format!("{folder}/frets/{i}_fret_pressed.png")).await.unwrap(),
-            pressed: load_texture(&format!("{folder}/frets/{i}_pressed.png")).await.unwrap(),
-            ring: load_texture(&format!("{folder}/frets/{i}_ring.png")).await.unwrap(),
-            shell: load_texture(&format!("{folder}/frets/{i}_shell.png")).await.unwrap(),
-        });
-    }
+    let frets = [
+        load_fret_assets(folder, 0).await,
+        load_fret_assets(folder, 1).await,
+        load_fret_assets(folder, 2).await,
+    ];
 
     Assets {
         notes: NoteAssets {
@@ -283,6 +274,16 @@ async fn load_assets(folder: &'static str) -> Assets {
         },
         frets,
         fret_piston: load_texture(&format!("{folder}/frets/piston.png")).await.unwrap(),
+    }
+}
+
+async fn load_fret_assets(folder: &'static str, fret: usize) -> FretAssets {
+    FretAssets {
+        fret: load_texture(&format!("{folder}/frets/{fret}_fret.png")).await.unwrap(),
+        fret_pressed: load_texture(&format!("{folder}/frets/{fret}_fret_pressed.png")).await.unwrap(),
+        pressed: load_texture(&format!("{folder}/frets/{fret}_pressed.png")).await.unwrap(),
+        ring: load_texture(&format!("{folder}/frets/{fret}_ring.png")).await.unwrap(),
+        shell: load_texture(&format!("{folder}/frets/{fret}_shell.png")).await.unwrap(),
     }
 }
 
@@ -325,7 +326,7 @@ fn render_texture(texture: &Texture2D, x: f32, y: f32, scale: f32, flip_x: bool,
 /// `notespeed` is in CH notespeed
 fn time_to_t(time: f32, notespeed: f32) -> f32 { 1.0 - (time * notespeed) / 7.87 }
 
-fn render_note(assets: &Assets, note: &Note, t: f32) {
+fn render_note(assets: &Assets, config: &Config, note: &Note, t: f32) {
     if note.frets >> 7 & 1 == 1 {
         if note.is_hopo || note.frets >> 6 & 1 == 1 {
             render_gem(&assets.notes.open_hopo, 6, t);
@@ -336,7 +337,11 @@ fn render_note(assets: &Assets, note: &Note, t: f32) {
     for i in 0..5 {
         if note.frets >> i & 1 == 1 {
             render_gem(if note.frets >> 6 & 1 == 1 {
-                &assets.notes.tap
+                if config.wor_tap {
+                    &assets.notes.wor_tap
+                } else {
+                    &assets.notes.tap
+                }
             } else if note.is_hopo {
                 &assets.notes.hopo
             } else {

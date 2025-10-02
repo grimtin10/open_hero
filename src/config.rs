@@ -3,12 +3,14 @@ use serde::{Deserialize, Serialize};
 
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(default)]
 pub struct Config {
     pub notespeed: f32,
     pub fullscreen: bool,
     pub width: u32,
     pub height: u32,
-    pub resizable: bool
+    pub resizable: bool,
+    pub wor_tap: bool,
 }
 
 impl Default for Config {
@@ -18,7 +20,8 @@ impl Default for Config {
             fullscreen: false,
             width: 1280,
             height: 720,
-            resizable: false
+            resizable: false,
+            wor_tap: false,
         }
     }
 }
