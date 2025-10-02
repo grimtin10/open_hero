@@ -81,7 +81,7 @@ pub fn t_to_x(t: f32, fret: f32) -> f32 {
     lerp(start_x, end_x, t)
 }
 /// Expects perspective corrected `t` value
-pub fn t_to_y(t: f32) -> f32 { lerp(305.0, 655.0, t) }
+pub fn t_to_y(t: f32) -> f32 { lerp(305.0, 655.0, t) } // more constants from GH3
 /// Expects perspective corrected `t` value
 pub fn t_to_scale(t: f32) -> f32 { lerp(0.4, 1.2, t) }
 

@@ -84,7 +84,8 @@ async fn main() {
     let mut controllers = ControllerManager::new().unwrap();
     let mut strikeline = Strikeline::default();
 
-    let song_name = "openchordtest";
+    let song_name = "supernovae solo";
+    let audio_file = "song.ogg";
     let song = song::parse(format!("songs/{song_name}/notes.chart")).unwrap();
     let chart = song.charts.get(&(Instrument::Single, Difficulty::Expert)).unwrap();
     let mut notes: Vec<NoteContainer> = chart.notes.iter().map(|note| NoteContainer { note: *note, t: 0.0 }).collect();
@@ -93,7 +94,7 @@ async fn main() {
     let volume = -12.0;
     // let volume = -100000.0;
     let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
-    let audio = StreamingSoundData::from_file(format!("songs/{song_name}/song.mp3")).unwrap().volume(volume);
+    let audio = StreamingSoundData::from_file(format!("songs/{song_name}/{audio_file}")).unwrap().volume(volume);
 
     let mut audio_playing = false;
     let mut audio_handle = manager.play(audio).unwrap();
@@ -107,17 +108,17 @@ async fn main() {
     let mut time_offset = 0.0; // offset between input system time and game time
     let mut frame_count = 0;
     loop {
-        clear_background(BLACK);
+        clear_background(Color::from_rgba(0, 0, 0, 0));
 
         handle_inputs(&mut controllers, &mut strikeline, time, &mut notes);
 
-        // // highway background
-        // draw_polygon(&[
-        //     vec2(t_to_x(2.0, -0.5), t_to_y(NEAR_T)),
-        //     vec2(t_to_x(2.0, 4.5), t_to_y(NEAR_T)),
-        //     vec2(t_to_x(FAR_T, 4.5), t_to_y(FAR_T)),
-        //     vec2(t_to_x(FAR_T, -0.5), t_to_y(FAR_T)),
-        // ], BLACK);
+        // highway background
+        draw_polygon(&[
+            vec2(t_to_x(NEAR_T, -0.5), t_to_y(NEAR_T)),
+            vec2(t_to_x(NEAR_T, 4.5), t_to_y(NEAR_T)),
+            vec2(t_to_x(FAR_T, 4.5), t_to_y(FAR_T)),
+            vec2(t_to_x(FAR_T, -0.5), t_to_y(FAR_T)),
+        ], BLACK);
 
         // hit window
         let hit_start = perspective(time_to_t(HIT_FRONT, config.notespeed));
@@ -154,11 +155,19 @@ async fn main() {
             while i <= render_end {
                 let note = &notes[i];
                 render_note(&assets, &config, &note.note, note.t);
+
+                let t = perspective(note.t);
+                let frets = note.note.frets_masked;
+                draw_text_ex(&format!("{}", lsb(frets)), t_to_x(t, 5.0), t_to_y(t), TextParams { font_size: 24, font_scale: t_to_scale(t), ..Default::default() });
+                draw_text_ex(&format!("{}", msb(frets)), t_to_x(t, 6.0), t_to_y(t), TextParams { font_size: 24, font_scale: t_to_scale(t), ..Default::default() });
                 i += 1;
             }
         }
 
         draw_fps();
+
+        draw_text(&format!("{}", lsb(strikeline.pressed)), t_to_x(1.0, 5.0), t_to_y(1.0), 24.0, WHITE);
+        draw_text(&format!("{}", msb(strikeline.pressed)), t_to_x(1.0, 6.0), t_to_y(1.0), 24.0, WHITE);
 
         // skip the first couple frames because of large frame times
         if frame_count > 2 {
@@ -183,6 +192,14 @@ async fn main() {
         next_frame().await;
     }
 }
+
+/// Gets the value of the first set bit from the right (least significant bit)
+#[inline]
+fn lsb(x: u8) -> u8 { x & x.wrapping_neg() }
+
+/// Gets the value of the first set bit from the left (most significant bit)
+#[inline]
+fn msb(x: u8) -> u8 { if x == 0 { 0 } else { 1 << x.ilog2() } }
 
 fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikeline, time: f32, notes: &mut Vec<NoteContainer>) {
     // get offset from input handler time to game time
@@ -231,13 +248,31 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
         // check for hits
         // TODO: make this not shit lol
         for i in (0..notes.len()).rev() {
-            let note = &notes[i];
-            let time = note.note.time as f32 - event_time;
+            let note = &notes[i].note;
+            let time = note.time as f32 - event_time;
 
             if time < HIT_FRONT && time > -HIT_BACK {
-                if note.note.frets_masked == strikeline.pressed {
+                // anchoring check
+                let lowest_note = lsb(note.frets_masked);
+                let highest_fret = msb(strikeline.pressed & !note.frets_masked);
+                let anchoring = !(note.is_chord && !(note.is_hopo || note.frets >> 6 & 1 == 1)) && highest_fret < lowest_note;
+
+                // shift out the "anchoring" frets, those being the ones below the lowest fret in the note
+                let lowest_index = if lowest_note == 0 {
+                    0
+                } else {
+                    lowest_note.ilog2()
+                };
+                let note_shifted = note.frets_masked >> lowest_index;
+                let frets_shifted = strikeline.pressed >> lowest_index;
+
+                // either you're anchoring it OR for a strum chord you're hitting the exact frets
+                let should_hit = anchoring && note_shifted == frets_shifted || note.frets_masked == strikeline.pressed;
+
+                if should_hit {
+                    // hit animation
                     for i in 0..5 {
-                        if note.note.frets_masked >> i & 1 == 1 || note.note.frets >> 7 & 1 == 1 {
+                        if note.frets_masked >> i & 1 == 1 || note.frets >> 7 & 1 == 1 {
                             strikeline.frets[i].height = 1.0;
                         }
                     }
@@ -287,4 +322,3 @@ async fn load_fret_assets(folder: &'static str, fret: usize) -> FretAssets {
         shell: load_texture(&format!("{folder}/frets/{fret}_shell.png")).await.unwrap(),
     }
 }
-
