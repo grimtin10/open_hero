@@ -1,6 +1,9 @@
+// TODO: maybe do rendering on screen from 0.0 to 1.0 so it's independent from window size?
+//       probably a good idea so we don't accidentally make something not scale properly
+
 use macroquad::prelude::*;
 
-use crate::{config::Config, song::Note, Assets, FretState, FADE_T, FAR_T};
+use crate::{config::Config, chart::Note, Assets, FretState, FADE_T, FAR_T};
 
 pub fn render_fret(assets: &Assets, fret: usize, state: FretState, pressed: bool) {
     let textures = if fret == 0 || fret == 4 {
@@ -15,14 +18,15 @@ pub fn render_fret(assets: &Assets, fret: usize, state: FretState, pressed: bool
 
     let x = t_to_x(1.0, fret as f32);
     let y = t_to_y(1.0);
+    let scale = get_scale() * 0.8;
 
     if state.height <= 0.0 && pressed {
-        render_texture(&textures.pressed, x, y, 0.8, flip, 1.0);
+        render_texture(&textures.pressed, x, y, scale, flip, 1.0);
     } else {
-        render_texture(&textures.shell, x, y, 0.8, flip, 1.0);
-        render_texture(&assets.fret_piston, x, y + 8.0, 0.8, false, 1.0);
-        render_texture(if pressed { &textures.fret_pressed } else { &textures.fret }, x, y - lerp(0.0, 20.0, state.height), 0.8, flip, 1.0);
-        render_texture(&textures.ring, x, y, 0.8, flip, 1.0);
+        render_texture(&textures.shell, x, y, scale, flip, 1.0);
+        render_texture(&assets.fret_piston, x, y + 8.0, scale, false, 1.0);
+        render_texture(if pressed { &textures.fret_pressed } else { &textures.fret }, x, y - lerp(0.0, 20.0, state.height) * get_scale(), scale, flip, 1.0);
+        render_texture(&textures.ring, x, y, scale, flip, 1.0);
     }
 }
 
@@ -39,7 +43,7 @@ pub fn render_texture(texture: &Texture2D, x: f32, y: f32, scale: f32, flip_x: b
 
 /// This function converts a time value (0 being at the strikeline, in seconds) to a position on the highway
 /// `notespeed` is in CH notespeed
-pub fn time_to_t(time: f32, notespeed: f32) -> f32 { 1.0 - (time * notespeed) / 7.87 }
+pub fn time_to_t(time: f64, notespeed: f32) -> f32 { (1.0 - (time * notespeed as f64) / 7.87) as f32 }
 
 pub fn render_note(assets: &Assets, config: &Config, note: &Note, t: f32) {
     if note.frets >> 7 & 1 == 1 {
@@ -73,22 +77,34 @@ pub fn lerp(a: f32, b: f32, t: f32) -> f32 { a + t * (b - a) }
 const PERSPECTIVE: f32 = 3.0;
 pub fn perspective(t: f32) -> f32 { t / (PERSPECTIVE - (PERSPECTIVE - 1.0) * t) }
 
+pub fn get_scale() -> f32 {
+    let x_scale = screen_width() / 1280.0;
+    let y_scale = screen_height() / 720.0;
+    x_scale.min(y_scale)
+}
+
 /// Expects perspective corrected `t` value
 pub fn t_to_x(t: f32, fret: f32) -> f32 {
     // constants taken from GH3
+    let scale = get_scale();
     let start_x = 576.0 + 32.0 * fret;
     let end_x = 435.2 + 101.4 * fret;
-    lerp(start_x, end_x, t)
+    lerp(start_x * scale, end_x * scale, t)
 }
 /// Expects perspective corrected `t` value
-pub fn t_to_y(t: f32) -> f32 { lerp(305.0, 655.0, t) } // more constants from GH3
+pub fn t_to_y(t: f32) -> f32 {
+    // more constants from GH3
+    let scale = get_scale();
+    lerp(305.0 * scale, 655.0 * scale, t)
+}
+
 /// Expects perspective corrected `t` value
 pub fn t_to_scale(t: f32) -> f32 { lerp(0.4, 1.2, t) }
 
 pub fn render_gem(texture: &Texture2D, fret: usize, t: f32) {
     let alpha = ((t - FAR_T) / FADE_T).min(1.0);
     let t = perspective(t);
-    let scale = if fret == 6 { 0.9 } else { 0.629 };
+    let scale = if fret == 6 { 0.9 } else { 0.629 } * get_scale();
     let fret = if fret == 6 { 2 } else { fret };
     render_texture(
         texture,

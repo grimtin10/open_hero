@@ -28,7 +28,7 @@ pub struct TempoEvent {
 
 #[derive(Debug)]
 pub enum SyncEvent {
-    TimeSignature(usize, usize),
+    TimeSignature { num: usize, den: usize },
     Tempo(TempoEvent),
 }
 
@@ -128,10 +128,10 @@ pub fn parse(file: String) -> Result<Song, Box<dyn Error>> {
                     if ["expert", "hard", "medium", "easy"].iter().any(|s| section_type.starts_with(s)) {
                         let chart = parse_chart(&lines, &mut i, section_type);
                         if song.charts.insert((chart.0, chart.1), chart.2).is_some() {
-                            println!("Chart contains duplicate note data for `{line}`!");
+                            println!("chart contains duplicate note data for `{line}`!");
                         }
                     } else {
-                        println!("Unhandled section type `{line}`")
+                        println!("unhandled section type `{line}`")
                     }
                 }
             }
@@ -143,32 +143,29 @@ pub fn parse(file: String) -> Result<Song, Box<dyn Error>> {
     let mut time = 0.0;
     let mut last_tick = 0;
     let mut last_bpm = 120.0;
-    let resolution = song.metadata.as_ref().expect("Chart had no Song metadata!").resolution.expect("Chart had no resolution!");
+    let resolution = song.metadata.as_ref().expect("chart had no `Song` metadata!").resolution.expect("chart had no resolution!");
     let mut bpm_events = Vec::new(); // this is just to make it 0.1% faster
-    for event in song.sync_track.as_mut().expect("Chart had no SyncTrack!") {
+    for event in song.sync_track.as_mut().expect("chart had no `SyncTrack`!") {
         let tick = event.0;
-        match &mut event.1 {
-            SyncEvent::Tempo(tempo) => {
-                time += ticks_to_seconds(tick - last_tick, last_bpm, resolution);
-                tempo.time = time;
-                last_tick = tick;
-                last_bpm = tempo.bpm;
-                bpm_events.push((tick, time, tempo.bpm));
-            }
-            _ => {}
+        if let SyncEvent::Tempo(tempo) = &mut event.1 {
+            time += ticks_to_seconds(tick - last_tick, last_bpm, resolution);
+            tempo.time = time;
+            last_tick = tick;
+            last_bpm = tempo.bpm;
+            bpm_events.push((tick, time, tempo.bpm));
         }
     }
 
-    for (_, chart) in &mut song.charts {
+    for chart in song.charts.values_mut() {
         postprocess_notes(chart, &bpm_events, resolution);
     }
 
-    println!("Chart parsing took {}ms", start.elapsed().as_millis());
+    println!("chart parsing took {}ms", start.elapsed().as_millis());
 
     Ok(song)
 }
 
-fn postprocess_notes(chart: &mut Chart, bpm_events: &Vec<(usize, f64, f32)>, resolution: usize) {
+fn postprocess_notes(chart: &mut Chart, bpm_events: &[(usize, f64, f32)], resolution: usize) {
     let mut last_bpm = 0;
     let mut i = 0;
     while i < chart.notes.len() {
@@ -184,10 +181,9 @@ fn postprocess_notes(chart: &mut Chart, bpm_events: &Vec<(usize, f64, f32)>, res
 
         if i > 0 && !note.is_chord {
             let last_note = &split.0[i - 1];
-            if last_note.is_chord || (!last_note.is_chord && last_note.frets_masked != note.frets_masked) {
-                if note.tick - last_note.tick <= (65.0 * resolution as f32 / 192.0) as usize {
-                    note.is_hopo = true;
-                }
+            if last_note.is_chord || last_note.frets_masked != note.frets_masked
+            && note.tick - last_note.tick <= (65.0 * resolution as f32 / 192.0) as usize {
+                note.is_hopo = true;
             }
         }
 
@@ -202,7 +198,7 @@ fn ticks_to_seconds(ticks: usize, bpm: f32, resolution: usize) -> f64 {
     ticks as f64 / resolution as f64 * (60.0 / bpm as f64)
 }
 
-fn parse_song(lines: &Vec<String>, i: &mut usize) -> SongSection {
+fn parse_song(lines: &[String], i: &mut usize) -> SongSection {
     let mut res = SongSection::default();
 
     loop {
@@ -223,7 +219,7 @@ fn parse_song(lines: &Vec<String>, i: &mut usize) -> SongSection {
             "offset"       => res.offset = Some(split[1].parse().unwrap()),
             "previewstart" => res.preview_start = Some(split[1].parse().unwrap()),
             "previewend"   => res.preview_end = Some(split[1].parse().unwrap()),
-            _ => println!("Unknown song metadata `{}` with value `{}`", split[0], split[1]),
+            _ => println!("unknown song metadata `{}` with value `{}`", split[0], split[1]),
         }
 
         *i += 1;
@@ -232,7 +228,7 @@ fn parse_song(lines: &Vec<String>, i: &mut usize) -> SongSection {
     res
 }
 
-fn parse_sync(lines: &Vec<String>, i: &mut usize) -> Vec<(usize, SyncEvent)> {
+fn parse_sync(lines: &[String], i: &mut usize) -> Vec<(usize, SyncEvent)> {
     let mut res = Vec::new();
 
     loop {
@@ -244,14 +240,14 @@ fn parse_sync(lines: &Vec<String>, i: &mut usize) -> Vec<(usize, SyncEvent)> {
         match split[2].to_lowercase().as_str() {
             "ts" => res.push((
                 tick,
-                SyncEvent::TimeSignature(
-                    split[3].parse().unwrap(),
-                    if let Some(denom) = split.get(4) {
-                        2usize.pow(denom.parse().unwrap())
+                SyncEvent::TimeSignature {
+                    num: split[3].parse().unwrap(),
+                    den: if let Some(den) = split.get(4) {
+                        2usize.pow(den.parse().unwrap())
                     } else {
                         4
                     }
-                )
+                }
             )),
             "b" => res.push((tick, SyncEvent::Tempo(TempoEvent { bpm: split[3].parse::<usize>().unwrap() as f32 / 1000.0, time: 0.0 }))),
             _ => {}
@@ -263,7 +259,7 @@ fn parse_sync(lines: &Vec<String>, i: &mut usize) -> Vec<(usize, SyncEvent)> {
     res
 }
 
-fn parse_events(lines: &Vec<String>, i: &mut usize) -> Vec<(usize, GlobalEvent)> {
+fn parse_events(lines: &[String], i: &mut usize) -> Vec<(usize, GlobalEvent)> {
     let mut res = Vec::new();
 
     loop {
@@ -295,7 +291,7 @@ fn parse_events(lines: &Vec<String>, i: &mut usize) -> Vec<(usize, GlobalEvent)>
     res
 }
 
-fn parse_chart(lines: &Vec<String>, i: &mut usize, chart_type: String) -> (Instrument, Difficulty, Chart) {
+fn parse_chart(lines: &[String], i: &mut usize, chart_type: String) -> (Instrument, Difficulty, Chart) {
     let difficulty = if chart_type.starts_with("easy") {
         Difficulty::Easy
     } else if chart_type.starts_with("medium") {
@@ -362,7 +358,7 @@ fn parse_chart(lines: &Vec<String>, i: &mut usize, chart_type: String) -> (Instr
 
                 let fret: u8 = val[1].parse().unwrap();
                 let length = val[2].parse().unwrap();
-                cur_frets = cur_frets | (1 << fret);
+                cur_frets |= 1 << fret;
                 cur_length[fret as usize] = length;
 
                 last_tick = tick;
@@ -413,5 +409,5 @@ fn remove_quotes(s: String) -> String {
 // RUSTTTTTT
 #[inline]
 fn remove_chars(s: String, start: usize, end: usize) -> String {
-    s.chars().skip(start).take(s.chars().count() - start - end).collect()
+    s.chars().skip(start).take(s.len() - start - end).collect()
 }

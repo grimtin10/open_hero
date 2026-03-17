@@ -1,7 +1,6 @@
 use std::{fs, io::Result};
 use serde::{Deserialize, Serialize};
 
-
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(default)]
 pub struct Config {
@@ -28,18 +27,14 @@ impl Default for Config {
 
 pub fn load_config() -> Result<Config> {
     let path = "config.json";
-    match fs::exists(path) {
-        Ok(false) => {
-            println!("No config found! Creating...");
+    if let Ok(false) = fs::exists(path) {
+        println!("no config found! creating...");
 
-            let default_config = Config::default();
-            let conf_json_obj = serde_json::to_string_pretty(&default_config).unwrap();
+        let default_config = Config::default();
+        let conf_json_obj = serde_json::to_string_pretty(&default_config).unwrap();
 
-            fs::write(path, conf_json_obj)?;
-            return Ok(default_config);
-        }
-
-        _ => {}
+        fs::write(path, conf_json_obj)?;
+        return Ok(default_config);
     }
 
     let json_config = fs::read_to_string(path)?;

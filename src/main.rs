@@ -1,15 +1,14 @@
+mod chart;
 mod config;
-mod controllers;
+mod input;
 mod render;
-mod song;
 
-use std::time::{Duration, Instant};
+use std::{sync::OnceLock, time::{Duration, Instant}};
 
-use gilrs::Button;
-use kira::{sound::streaming::StreamingSoundData, AudioManager, AudioManagerSettings, DefaultBackend, Tween};
+use kira::{sound::streaming::StreamingSoundData, AudioManager, AudioManagerSettings, Tween};
 use macroquad::prelude::*;
 
-use crate::{config::load_config, controllers::{ControllerEventType, ControllerManager}, render::*, song::{Difficulty, Instrument, Note}};
+use crate::{chart::{Difficulty, Instrument, Note}, config::{Config, load_config}, input::InputManager, render::*};
 
 // haha it says fart
 const FAR_T: f32 = 0.0;
@@ -17,8 +16,8 @@ const NEAR_T: f32 = 1.5;
 const FADE_T: f32 = 0.1;
 
 // clone hero hit window (for now)
-const HIT_FRONT: f32 = 0.07;
-const HIT_BACK:  f32 = 0.07;
+const HIT_FRONT: f64 = 0.07;
+const HIT_BACK:  f64 = 0.07;
 
 struct NoteAssets {
     pub note: Texture2D,
@@ -61,12 +60,19 @@ struct NoteContainer {
     pub t: f32,
 }
 
+static CONFIG: OnceLock<Config> = OnceLock::new();
+
+fn config() -> &'static Config {
+    CONFIG.get_or_init(|| load_config().expect("failed to load config"))
+}
+
 fn window_conf() -> Conf {
+    let config = config();
     Conf {
         window_title: "Open Hero".into(),
-        window_width: 1280,
-        window_height: 720,
-        window_resizable: false,
+        window_width: config.width as i32,
+        window_height: config.height as i32,
+        window_resizable: config.resizable,
 
         ..Default::default()
     }
@@ -76,24 +82,22 @@ fn window_conf() -> Conf {
 async fn main() {
     let start = Instant::now();
     let assets = load_assets("assets").await;
-    println!("Loading assets took {}ms", start.elapsed().as_millis());
+    println!("loading assets took {}ms", start.elapsed().as_millis());
 
-    let config = load_config().expect("Failed to load config");
+    let config = config();
 
-    // TODO: keyboard support/proper InputManager system
-    let mut controllers = ControllerManager::new().unwrap();
     let mut strikeline = Strikeline::default();
 
-    let song_name = "supernovae solo";
+    let song_name = "Star";
     let audio_file = "song.ogg";
-    let song = song::parse(format!("songs/{song_name}/notes.chart")).unwrap();
+    let song = chart::parse(format!("songs/{song_name}/notes.chart")).unwrap();
     let chart = song.charts.get(&(Instrument::Single, Difficulty::Expert)).unwrap();
     let mut notes: Vec<NoteContainer> = chart.notes.iter().map(|note| NoteContainer { note: *note, t: 0.0 }).collect();
     notes.reverse();
 
     let volume = -12.0;
     // let volume = -100000.0;
-    let mut manager = AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()).unwrap();
+    let mut manager: AudioManager = AudioManager::new(AudioManagerSettings::default()).unwrap();
     let audio = StreamingSoundData::from_file(format!("songs/{song_name}/{audio_file}")).unwrap().volume(volume);
 
     let mut audio_playing = false;
@@ -104,13 +108,15 @@ async fn main() {
     });
     audio_handle.seek_to(0.0);
 
-    let mut time = -5.0;
+    let mut input = InputManager::new(false);
+
+    let mut time = -2.5;
     let mut time_offset = 0.0; // offset between input system time and game time
     let mut frame_count = 0;
     loop {
         clear_background(Color::from_rgba(0, 0, 0, 0));
 
-        handle_inputs(&mut controllers, &mut strikeline, time, &mut notes);
+        handle_inputs(&mut input, &mut strikeline, time, &mut notes);
 
         // highway background
         draw_polygon(&[
@@ -136,13 +142,13 @@ async fn main() {
         }
 
         // get notes on screen
-        if notes.len() > 0 {
+        if !notes.is_empty() {
             let mut render_end = notes.len() - 1;
             let render_start;
             let mut i = notes.len() - 1;
             loop {
                 let note = &mut notes[i];
-                note.t = time_to_t(note.note.time as f32 - time, config.notespeed);
+                note.t = time_to_t(note.note.time - time, config.notespeed);
                 if note.t > NEAR_T { render_end = i; }
                 if note.t < FAR_T { render_start = i; break; }
 
@@ -151,31 +157,20 @@ async fn main() {
             }
 
             // render notes
-            let mut i = render_start;
-            while i <= render_end {
-                let note = &notes[i];
-                render_note(&assets, &config, &note.note, note.t);
-
-                let t = perspective(note.t);
-                let frets = note.note.frets_masked;
-                draw_text_ex(&format!("{}", lsb(frets)), t_to_x(t, 5.0), t_to_y(t), TextParams { font_size: 24, font_scale: t_to_scale(t), ..Default::default() });
-                draw_text_ex(&format!("{}", msb(frets)), t_to_x(t, 6.0), t_to_y(t), TextParams { font_size: 24, font_scale: t_to_scale(t), ..Default::default() });
-                i += 1;
+            for note in notes.iter().skip(render_start).take(render_end + 1) {
+                render_note(&assets, config, &note.note, note.t);
             }
         }
 
         draw_fps();
 
-        draw_text(&format!("{}", lsb(strikeline.pressed)), t_to_x(1.0, 5.0), t_to_y(1.0), 24.0, WHITE);
-        draw_text(&format!("{}", msb(strikeline.pressed)), t_to_x(1.0, 6.0), t_to_y(1.0), 24.0, WHITE);
-
         // skip the first couple frames because of large frame times
         if frame_count > 2 {
             // sync the game time and the input handler time
             if time_offset == 0.0 {
-                time_offset = time - controllers.start.elapsed().as_secs_f32();
+                time_offset = time - input.elapsed().as_secs_f64();
             }
-            time = controllers.start.elapsed().as_secs_f32() + time_offset;
+            time = input.elapsed().as_secs_f64() + time_offset;
         }
 
         // start the song when time >= 0
@@ -193,19 +188,12 @@ async fn main() {
     }
 }
 
-/// Gets the value of the first set bit from the right (least significant bit)
-#[inline]
-fn lsb(x: u8) -> u8 { x & x.wrapping_neg() }
-
-/// Gets the value of the first set bit from the left (most significant bit)
-#[inline]
-fn msb(x: u8) -> u8 { if x == 0 { 0 } else { 1 << x.ilog2() } }
-
-fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikeline, time: f32, notes: &mut Vec<NoteContainer>) {
-    // get offset from input handler time to game time
-    let input_time = controllers.start.elapsed().as_secs_f32();
-    let time_offset = time - input_time;
-    
+fn handle_inputs(
+    input: &mut InputManager,
+    strikeline: &mut Strikeline,
+    time: f64,
+    notes: &mut Vec<NoteContainer>
+) {
     // update fret hit animation
     for fret in &mut strikeline.frets {
         if fret.height > 0.0 {
@@ -214,80 +202,9 @@ fn handle_inputs(controllers: &mut ControllerManager, strikeline: &mut Strikelin
         fret.height = fret.height.max(0.0);
     }
 
-    let mut hits = 0;
-    // loop over every event and check for note hit
-    for event in controllers.drain_events() {
-        // convert microseconds to seconds then to game time
-        let event_time = event.timestamp as f32 / 1_000_000.0 + time_offset;
+    input.update(strikeline, notes, time);
 
-        // bitmasks are fun
-        match event.event {
-            ControllerEventType::ButtonPressed(button) => {
-                match button {
-                    Button::West =>        strikeline.pressed |= 1 << 0,
-                    Button::South =>       strikeline.pressed |= 1 << 1,
-                    Button::North =>       strikeline.pressed |= 1 << 2,
-                    Button::East =>        strikeline.pressed |= 1 << 3,
-                    Button::LeftTrigger => strikeline.pressed |= 1 << 4,
-                    _ => {}
-                }
-            }
-            ControllerEventType::ButtonReleased(button) => {
-                match button {
-                    Button::West =>        strikeline.pressed &= !(1 << 0),
-                    Button::South =>       strikeline.pressed &= !(1 << 1),
-                    Button::North =>       strikeline.pressed &= !(1 << 2),
-                    Button::East =>        strikeline.pressed &= !(1 << 3),
-                    Button::LeftTrigger => strikeline.pressed &= !(1 << 4),
-                    _ => {}
-                }
-            }
-            _ => {}
-        }
-
-        // check for hits
-        // TODO: make this not shit lol
-        for i in (0..notes.len()).rev() {
-            let note = &notes[i].note;
-            let time = note.time as f32 - event_time;
-
-            if time < HIT_FRONT && time > -HIT_BACK {
-                // anchoring check
-                let lowest_note = lsb(note.frets_masked);
-                let highest_fret = msb(strikeline.pressed & !note.frets_masked);
-                let anchoring = !(note.is_chord && !(note.is_hopo || note.frets >> 6 & 1 == 1)) && highest_fret < lowest_note;
-
-                // shift out the "anchoring" frets, those being the ones below the lowest fret in the note
-                let lowest_index = if lowest_note == 0 {
-                    0
-                } else {
-                    lowest_note.ilog2()
-                };
-                let note_shifted = note.frets_masked >> lowest_index;
-                let frets_shifted = strikeline.pressed >> lowest_index;
-
-                // either you're anchoring it OR for a strum chord you're hitting the exact frets
-                let should_hit = anchoring && note_shifted == frets_shifted || note.frets_masked == strikeline.pressed;
-
-                if should_hit {
-                    // hit animation
-                    for i in 0..5 {
-                        if note.frets_masked >> i & 1 == 1 || note.frets >> 7 & 1 == 1 {
-                            strikeline.frets[i].height = 1.0;
-                        }
-                    }
-                    notes.remove(i);
-                    hits += 1;
-                }
-                break;
-            }
-
-            if time > HIT_FRONT { break; }
-        }
-    }
-    if hits > 0 { println!("hit {hits} note this frame"); }
-
-    if notes.len() > 0 && notes[notes.len()-1].t > NEAR_T {
+    if !notes.is_empty() && notes[notes.len()-1].t > NEAR_T {
         notes.remove(notes.len()-1);
     }
 }
