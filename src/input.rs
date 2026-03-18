@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::VecDeque, time::Duration};
 
 use mash::{DeviceKind, InputEvent, InputKind, InputThread, Receiver};
 
@@ -49,16 +49,17 @@ impl InputManager {
         }
     }
 
-    pub fn update(&mut self, strikeline: &mut Strikeline, notes: &mut Vec<NoteContainer>, time: f64) {
+    pub fn update(&mut self, strikeline: &mut Strikeline, notes: &mut VecDeque<NoteContainer>, time: f64) {
         if self.bot {
-            while !notes.is_empty() && notes[notes.len()-1].t >= 1.0 {
-                let note = notes.remove(notes.len() - 1).note;
+            while let Some(note) = notes.iter().last() && note.t >= 1.0 {
+                let note = note.note;
                 strikeline.pressed = note.frets_masked;
                 for i in 0..5 {
                     if note.frets_masked >> i & 1 == 1 || note.frets >> 7 & 1 == 1 {
                         strikeline.frets[i].height = 1.0;
                     }
                 }
+                notes.pop_back();
             }
             return;
         }
@@ -87,7 +88,7 @@ impl InputManager {
         }
     }
 
-    fn handle_input(&mut self, timestamp: u128, kind: InputKind, strikeline: &mut Strikeline, notes: &mut Vec<NoteContainer>, time: f64) {
+    fn handle_input(&mut self, timestamp: u128, kind: InputKind, strikeline: &mut Strikeline, notes: &mut VecDeque<NoteContainer>, time: f64) {
         let time_offset = sec_to_ns(time) - timestamp as i128;
 
         match kind {
@@ -110,9 +111,8 @@ impl InputManager {
             }
         }
 
-        // TODO: make this not shit lol
-        for i in (0..notes.len()).rev() {
-            let note = &notes[i].note;
+        for note in notes.iter().rev() {
+            let note = note.note;
             let time = sec_to_ns(note.time) - timestamp as i128 - time_offset;
             if time < sec_to_ns(HIT_FRONT) && time > -sec_to_ns(HIT_BACK) {
                 let tappable = note.is_hopo || note.frets >> 6 & 1 == 1;
@@ -147,7 +147,7 @@ impl InputManager {
                             strikeline.frets[i].height = 1.0;
                         }
                     }
-                    notes.remove(notes.len() - 1);
+                    notes.pop_back();
                 }
                 break;
             }

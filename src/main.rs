@@ -3,7 +3,7 @@ mod config;
 mod input;
 mod render;
 
-use std::{sync::OnceLock, time::{Duration, Instant}};
+use std::{collections::VecDeque, sync::OnceLock, time::{Duration, Instant}};
 
 use kira::{sound::streaming::StreamingSoundData, AudioManager, AudioManagerSettings, Tween};
 use macroquad::prelude::*;
@@ -92,8 +92,7 @@ async fn main() {
     let audio_file = "song.ogg";
     let song = chart::parse(format!("songs/{song_name}/notes.chart")).unwrap();
     let chart = song.charts.get(&(Instrument::Single, Difficulty::Expert)).unwrap();
-    let mut notes: Vec<NoteContainer> = chart.notes.iter().map(|note| NoteContainer { note: *note, t: 0.0 }).collect();
-    notes.reverse();
+    let mut notes: VecDeque<NoteContainer> = chart.notes.iter().map(|note| NoteContainer { note: *note, t: 0.0 }).collect();
 
     let volume = -12.0;
     // let volume = -100000.0;
@@ -141,25 +140,18 @@ async fn main() {
             render_fret(&assets, i, strikeline.frets[i], strikeline.pressed >> i & 1 == 1);
         }
 
-        // get notes on screen
-        if !notes.is_empty() {
-            let mut render_end = notes.len() - 1;
-            let render_start;
-            let mut i = notes.len() - 1;
-            loop {
-                let note = &mut notes[i];
-                note.t = time_to_t(note.note.time - time, config.notespeed);
-                if note.t > NEAR_T { render_end = i; }
-                if note.t < FAR_T { render_start = i; break; }
+        // update `t` values
+        for note in &mut notes {
+            note.t = time_to_t(note.note.time - time, config.notespeed);
+        }
 
-                if i == 0 { render_start = 0; break; }
-                i -= 1;
-            }
+        // find the visible range
+        let render_start = notes.partition_point(|n| n.t > NEAR_T);
+        let render_end = notes.partition_point(|n| n.t > FAR_T);
 
-            // render notes
-            for note in notes.iter().skip(render_start).take(render_end + 1) {
-                render_note(&assets, config, &note.note, note.t);
-            }
+        // render notes
+        for note in notes.range(render_start..render_end).rev() {
+            render_note(&assets, config, &note.note, note.t);
         }
 
         draw_fps();
@@ -192,7 +184,7 @@ fn handle_inputs(
     input: &mut InputManager,
     strikeline: &mut Strikeline,
     time: f64,
-    notes: &mut Vec<NoteContainer>
+    notes: &mut VecDeque<NoteContainer>
 ) {
     // update fret hit animation
     for fret in &mut strikeline.frets {
@@ -205,7 +197,7 @@ fn handle_inputs(
     input.update(strikeline, notes, time);
 
     if !notes.is_empty() && notes[notes.len()-1].t > NEAR_T {
-        notes.remove(notes.len()-1);
+        notes.pop_back();
     }
 }
 
